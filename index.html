@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>ClearSpend</title>
+
+<!-- ============================================================
+     PWA (Progressive Web App) SETUP
+     ------------------------------------------------------------
+     These tags + the manifest.json + service-worker.js (registered
+     in the <script> below) are what let phones install ClearSpend
+     as a real home-screen app: full-screen, with an icon, and able
+     to work offline.
+     ============================================================ -->
+
+<!-- Tells the browser this app is installable, and what to call it,
+     what icon to use, and what colors to show while it loads -->
+<link rel="manifest" href="manifest.json" />
+
+<!-- Sets the browser tab icon (favicon) -->
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+
+<!-- iOS-specific: the icon used when added to an iPhone/iPad home screen -->
+<link rel="apple-touch-icon" href="icons/icon-apple-touch.png" />
+
+<!-- iOS-specific: makes Safari treat this as a standalone app (hides
+     the browser address bar) when launched from the home screen -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ClearSpend" />
+
+<!-- Sets the color of the phone's status bar / browser chrome to match the app -->
+<meta name="theme-color" content="#000000" />
+
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ================================================================
+     TOP NAVIGATION
+     Each button has a data-section attribute that matches the id
+     of the screen div it should open (e.g. data-section="home"
+     opens the div with id="s-home"). The click handling is in the
+     setupNav() function near the bottom of the <script>.
+     ================================================================ -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="logo"><div class="logo-dot"></div>ClearSpend</div>
+    <nav class="nav">
+      <button class="nav-btn active" data-section="home">Home</button>
+      <button class="nav-btn" data-section="purchase">Purchase</button>
+      <button class="nav-btn" data-section="cards">Cards</button>
+      <button class="nav-btn" data-section="calendar">Calendar</button>
+      <button class="nav-btn" data-section="goals">Goals</button>
+      <button class="nav-btn" data-section="calculator">Calculator</button>
+      <button class="nav-btn" data-section="review">Year Review</button>
+    </nav>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- ============================================================
+       HOME / OVERVIEW SCREEN
+       ============================================================ -->
+  <div id="s-home" class="screen active">
+    <div class="page-header">
+      <h1>Overview</h1>
+      <p class="sub" id="home-sub">Your financial snapshot</p>
+    </div>
+
+    <!-- Top stat tiles: available balance, spent, daily budget, fixed payments -->
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Available balance</div>
+        <div class="stat-val green" id="h-avail">$0.00</div>
+        <div class="stat-sub" id="h-income-sub"></div>
+      </div>
+      <div class="stat-card"><div class="stat-label">Spent this month</div><div class="stat-val" id="h-spent">$0.00</div></div>
+      <div class="stat-card"><div class="stat-label">Daily budget</div><div class="stat-val orange" id="h-daily">$0.00</div></div>
+      <div class="stat-card"><div class="stat-label">Fixed payments</div><div class="stat-val" id="h-fixed">$0.00</div></div>
+    </div>
+
+    <div class="cols-2">
+      <!-- LEFT COLUMN: income + fixed expenses forms -->
+      <div>
+        <div class="card">
+          <div class="card-title">Set your income</div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <!-- This label's text changes depending on frequency (see onIncomeFreqChange) -->
+              <label for="inc-amt" id="inc-amt-label">Amount ($)</label>
+              <input type="number" id="inc-amt" placeholder="3000" min="0" />
+            </div>
+            <div class="form-group">
+              <label for="inc-freq">Frequency</label>
+              <!-- Changing this shows/hides the pay-schedule section below -->
+              <select id="inc-freq" onchange="onIncomeFreqChange()">
+                <option value="monthly">Monthly</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Biweekly (every 2 weeks)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               PAY SCHEDULE SECTION
+               Only shown when frequency is weekly or biweekly.
+               This solves the "biweekly doesn't divide evenly into months"
+               problem by letting the user choose HOW paychecks are counted:
+                 - average:  the old behavior (2.17x or 4.33x per month)
+                 - pattern:  user gives ONE known pay date, and we compute
+                             every other pay date (every 7 or 14 days) from it
+                 - manual:   user manually lists exact pay dates
+               ============================================================ -->
+          <div id="pay-schedule-section" style="display:none">
+            <label>How should we count paychecks per month?</label>
+            <div class="radio-group">
+              <label class="radio-option" data-pay-mode="average">
+                <input type="radio" name="pay-mode" value="average" onchange="onPayModeChange('average')" />
+                Simple average (2.17 or 4.33/mo)
+              </label>
+              <label class="radio-option" data-pay-mode="pattern">
+                <input type="radio" name="pay-mode" value="pattern" onchange="onPayModeChange('pattern')" />
+                Recurring pattern (e.g. every other Friday)
+              </label>
+              <label class="radio-option" data-pay-mode="manual">
+                <input type="radio" name="pay-mode" value="manual" onchange="onPayModeChange('manual')" />
+                Pick exact pay dates each month
+              </label>
+            </div>
+
+            <!-- Shown only when "pattern" is selected -->
+            <div class="pay-pattern-box" id="pay-pattern-box">
+              <label for="pay-anchor-date">Enter one known pay date — we'll calculate the rest from it</label>
+              <input type="date" id="pay-anchor-date" />
+              <div style="font-size:12px;color:var(--text3);margin-top:8px">
+                Example: if you're paid every other Friday and got paid on June 12, 2026, enter that date.
+                We'll count how many of those paydates land in each month.
+              </div>
+            </div>
+
+            <!-- Shown only when "manual" is selected -->
+            <div class="pay-manual-box" id="pay-manual-box">
+              <label for="pay-manual-date">Add specific pay dates (one at a time, any month)</label>
+              <div style="display:flex;gap:8px">
+                <input type="date" id="pay-manual-date" style="flex:1" />
+                <button class="btn btn-ghost btn-sm" onclick="addManualPayDate()" style="white-space:nowrap">+ Add date</button>
+              </div>
+              <!-- Chips showing each added date with a remove (x) button -->
+              <div class="date-tag-list" id="manual-date-tags"></div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="saveIncome()" style="margin-top:14px">Save income</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Fixed monthly payments</div>
+          <div class="form-row">
+            <div class="form-group"><label for="exp-n">Payment name</label><input type="text" id="exp-n" placeholder="Rent, Netflix, gym…" /></div>
+            <div class="form-group"><label for="exp-a">Amount ($)</label><input type="number" id="exp-a" placeholder="0.00" min="0" /></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="addExpense()">+ Add payment</button>
+          <div style="margin-top:14px" id="exp-list"><p class="empty-state">No fixed payments yet</p></div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: spending breakdown + recent activity -->
+      <div>
+        <div class="card">
+          <div class="card-title">Spending breakdown</div>
+          <div class="breakdown-item">
+            <div class="breakdown-label"><span>Fixed payments</span><span id="b-fixed">—</span></div>
+            <div class="prog-bar"><div class="prog-fill blue" id="pb-fixed" style="width:0%"></div></div>
+          </div>
+          <div class="breakdown-item">
+            <div class="breakdown-label"><span>Card purchases</span><span id="b-purch">—</span></div>
+            <div class="prog-bar"><div class="prog-fill orange" id="pb-purch" style="width:0%"></div></div>
+          </div>
+          <div class="breakdown-item">
+            <div class="breakdown-label"><span>Remaining</span><span id="b-remain">—</span></div>
+            <div class="prog-bar"><div class="prog-fill gray" id="pb-remain" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Recent activity</div>
+          <div id="recent-activity"><p class="empty-state">No purchases yet</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PURCHASE SCREEN — log a new transaction
+       ============================================================ -->
+  <div id="s-purchase" class="screen">
+    <div class="page-header"><h1>Log a purchase</h1><p class="sub">Track a new transaction</p></div>
+    <div class="cols-2">
+      <div class="card">
+        <div class="form-row">
+          <div class="form-group"><label for="p-amt">Amount ($)</label><input type="number" id="p-amt" placeholder="0.00" min="0" step="0.01" /></div>
+          <div class="form-group"><label for="p-card">Card used</label><select id="p-card"><option value="">— Select card —</option></select></div>
+        </div>
+        <div class="form-group"><label for="p-cat">Category</label>
+          <select id="p-cat">
+            <option value="food">Food &amp; dining</option>
+            <option value="gas">Gas &amp; transport</option>
+            <option value="shopping">Shopping</option>
+            <option value="entertainment">Entertainment</option>
+            <option value="health">Health &amp; wellness</option>
+            <option value="utilities">Utilities</option>
+            <option value="travel">Travel</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-group"><label for="p-note">Note (optional)</label><input type="text" id="p-note" placeholder="Groceries, gas, coffee…" /></div>
+        <div class="form-group"><label for="p-date">Date</label><input type="date" id="p-date" /></div>
+        <button class="btn btn-primary" onclick="logPurchase()">Record purchase</button>
+      </div>
+      <div class="card">
+        <div class="card-title">All purchases</div>
+        <div id="p-list"><p class="empty-state">No purchases yet</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       CARDS SCREEN — manage credit/debit cards
+       ============================================================ -->
+  <div id="s-cards" class="screen">
+    <div class="page-header"><h1>My cards</h1><p class="sub">Track spending &amp; utilization per card</p></div>
+    <div class="cols-2">
+      <div class="card">
+        <div class="card-title">Add a card</div>
+        <div class="form-row">
+          <div class="form-group"><label for="c-name">Card name</label><input type="text" id="c-name" placeholder="Chase Sapphire, Amex Gold…" /></div>
+          <div class="form-group"><label for="c-type">Network</label>
+            <select id="c-type">
+              <option value="visa">Visa</option>
+              <option value="mastercard">Mastercard</option>
+              <option value="amex">Amex</option>
+              <option value="discover">Discover</option>
+              <option value="debit">Debit</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label for="c-limit">Credit limit ($)</label><input type="number" id="c-limit" placeholder="10000" min="0" /></div>
+          <div class="form-group"><label for="c-apr">APR (%)</label><input type="number" id="c-apr" placeholder="24.99" step="0.01" min="0" /></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label for="c-due">Due date (day of month)</label><input type="number" id="c-due" placeholder="15" min="1" max="31" /></div>
+          <div class="form-group"><label for="c-bal">Current balance owed ($)</label><input type="number" id="c-bal" placeholder="0.00" step="0.01" min="0" /></div>
+        </div>
+        <button class="btn btn-primary" onclick="addCard()">Add card</button>
+      </div>
+      <div>
+        <div id="c-list"><p class="empty-state">No cards added yet</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       CALENDAR SCREEN — daily budget tracker
+       ============================================================ -->
+  <div id="s-calendar" class="screen">
+    <div class="page-header"><h1>Daily tracker</h1><p class="sub">Budget vs. actual spending per day</p></div>
+    <div class="cal-legend">
+      <span><span class="legend-dot green"></span>Under budget</span>
+      <span><span class="legend-dot red"></span>Over budget</span>
+      <span><span class="legend-dot gray"></span>No spending</span>
+      <span><span class="legend-dot payday"></span>Payday</span>
+    </div>
+    <div class="cols-2">
+      <div class="card">
+        <div class="cal-nav">
+          <button class="btn btn-ghost btn-sm" onclick="calMove(-1)">&#8592; Prev</button>
+          <span class="cal-month-title" id="cal-label"></span>
+          <button class="btn btn-ghost btn-sm" onclick="calMove(1)">Next &#8594;</button>
+        </div>
+        <div class="cal-grid">
+          <div class="cal-head">Sun</div><div class="cal-head">Mon</div><div class="cal-head">Tue</div><div class="cal-head">Wed</div><div class="cal-head">Thu</div><div class="cal-head">Fri</div><div class="cal-head">Sat</div>
+          <!-- Individual day cells get injected here by renderCalendar() -->
+          <div id="cal-days" style="display:contents"></div>
+        </div>
+      </div>
+      <div class="card" id="cal-stats"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       GOALS SCREEN — savings goals
+       ============================================================ -->
+  <div id="s-goals" class="screen">
+    <div class="page-header"><h1>Savings goals</h1><p class="sub">Track what you're saving toward</p></div>
+    <div class="cols-2">
+      <div>
+        <div class="card">
+          <div class="card-title">Add a goal</div>
+          <div class="form-group"><label for="g-name">Goal name</label><input type="text" id="g-name" placeholder="Emergency fund, vacation, new laptop…" /></div>
+          <div class="form-row">
+            <div class="form-group"><label for="g-target">Target amount ($)</label><input type="number" id="g-target" placeholder="5000" min="0" /></div>
+            <div class="form-group"><label for="g-saved">Already saved ($)</label><input type="number" id="g-saved" placeholder="0" min="0" /></div>
+          </div>
+          <div class="form-group"><label for="g-date">Target date (optional)</label><input type="date" id="g-date" /></div>
+          <button class="btn btn-primary" onclick="addGoal()">Add goal</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Add funds to a goal</div>
+          <div class="form-row">
+            <div class="form-group"><label for="g-sel">Select goal</label><select id="g-sel"><option value="">No goals yet</option></select></div>
+            <div class="form-group"><label for="g-add-amt">Amount ($)</label><input type="number" id="g-add-amt" placeholder="50" min="0" /></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="addToGoal()">+ Add funds</button>
+        </div>
+      </div>
+      <div id="g-list"><p class="empty-state">No goals yet. Add one to start saving!</p></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       CALCULATOR SCREEN — redesigned for clarity
+       ------------------------------------------------------------
+       OLD VERSION asked for "current balance" + "monthly payment"
+       + "days until due", which was confusing because those three
+       numbers don't naturally relate to how people think about
+       their card ("I have a $1,000 limit, I've spent $200, my
+       payment is due on the 15th").
+
+       NEW VERSION asks for:
+         - Credit limit
+         - Amount already charged (this billing cycle)
+         - APR
+         - Payment due date (an actual calendar date)
+         - Optional: planned monthly payment (for payoff projection)
+
+       From those it computes:
+         - How much room is left before hitting the limit
+         - Utilization % (charged / limit)
+         - Interest accruing per day on the charged amount
+         - Total interest that will accrue by the due date
+         - If a monthly payment is given: months to pay off + total interest
+       ============================================================ -->
+  <div id="s-calculator" class="screen">
+    <div class="page-header"><h1>Calculator</h1><p class="sub">See exactly what your card is costing you</p></div>
+
+    <div class="cols-2">
+      <!-- LEFT: inputs -->
+      <div class="card">
+        <div class="card-title">Your card details</div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cc-limit">Credit limit ($)</label>
+            <input type="number" id="cc-limit" placeholder="10000" oninput="runCalc()" />
+          </div>
+          <div class="form-group">
+            <label for="cc-charged">Amount charged so far ($)</label>
+            <input type="number" id="cc-charged" placeholder="2500" oninput="runCalc()" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cc-apr">APR — interest rate (%)</label>
+            <input type="number" id="cc-apr" placeholder="24.99" step="0.01" oninput="runCalc()" />
+          </div>
+          <div class="form-group">
+            <label for="cc-due">Payment due date</label>
+            <input type="date" id="cc-due" oninput="runCalc()" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="cc-pay">Planned monthly payment ($) — optional</label>
+          <input type="number" id="cc-pay" placeholder="100" oninput="runCalc()" />
+          <div style="font-size:12px;color:var(--text3);margin-top:6px">
+            Leave this blank if you're just checking interest. Fill it in to see how long
+            it would take to pay off this balance.
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: results -->
+      <div id="calc-out" class="result-box" style="display:none">
+        <div class="result-box-title">What this is costing you</div>
+
+        <div class="result-grid">
+          <div class="result-item">
+            <div class="r-label">Available credit left</div>
+            <div class="r-val good" id="r-available">—</div>
+          </div>
+          <div class="result-item">
+            <div class="r-label">Card utilization</div>
+            <div class="r-val" id="r-util">—</div>
+          </div>
+          <div class="result-item">
+            <div class="r-label">Interest per day</div>
+            <div class="r-val danger" id="r-daily">—</div>
+          </div>
+          <div class="result-item">
+            <div class="r-label">Interest by due date</div>
+            <div class="r-val danger" id="r-due">—</div>
+          </div>
+        </div>
+
+        <!-- This whole block only appears if "planned monthly payment" is filled in -->
+        <div id="calc-payoff-section" style="display:none">
+          <div class="result-advice" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
+            <div class="result-grid">
+              <div class="result-item">
+                <div class="r-label">Months to pay off</div>
+                <div class="r-val" id="r-months">—</div>
+              </div>
+              <div class="result-item">
+                <div class="r-label">Total interest if you pay this way</div>
+                <div class="r-val danger" id="r-interest">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="result-advice" id="r-tip"></div>
+        <div id="calc-chart"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       YEAR REVIEW SCREEN
+       ============================================================ -->
+  <div id="s-review" class="screen">
+    <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+      <div><h1>Year in review</h1><p class="sub" id="review-sub">See how you did</p></div>
+      <select id="review-year" onchange="renderYearReview()" style="width:auto"></select>
+    </div>
+    <div class="stat-grid" id="yr-stats"></div>
+    <div class="cols-2">
+      <div class="card">
+        <div class="card-title">Monthly heatmap — every day of the year</div>
+        <div id="yr-heatmap"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Spending by category</div>
+        <div id="yr-categories"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/state.js"></script>
+<script src="js/home.js"></script>
+<script src="js/purchase.js"></script>
+<script src="js/cards.js"></script>
+<script src="js/calendar.js"></script>
+<script src="js/goals.js"></script>
+<script src="js/calculator.js"></script>
+<script src="js/review.js"></script>
+<script src="js/app.js"></script>
+
+<!-- ============================================================
+     SERVICE WORKER REGISTRATION
+     ------------------------------------------------------------
+     This tells the browser "hey, go set up that background script
+     (service-worker.js) so this app can be installed and work
+     offline." It only runs if the browser supports service workers
+     (basically every modern browser does), and it's wrapped in a
+     check so it won't cause errors on older browsers.
+     ============================================================ -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js')
+        .then((reg) => console.log('Service worker registered:', reg.scope))
+        .catch((err) => console.warn('Service worker registration failed:', err));
+    });
+  }
+</script>
+</body>
+</html>
